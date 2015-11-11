@@ -1,0 +1,1 @@
+# arquillian-docker-manual-cluster
