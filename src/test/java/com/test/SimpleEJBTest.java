@@ -1,11 +1,14 @@
 package com.test;
 
+import java.io.IOException;
 import java.net.URI;
 
+import javax.ejb.EJB;
 import javax.inject.Inject;
 
 import org.jboss.arquillian.container.test.api.Deployer;
 import org.jboss.arquillian.container.test.api.Deployment;
+import org.jboss.arquillian.container.test.api.OperateOnDeployment;
 import org.jboss.arquillian.container.test.api.RunAsClient;
 import org.jboss.arquillian.container.test.api.TargetsContainer;
 import org.jboss.arquillian.junit.Arquillian;
@@ -14,15 +17,19 @@ import org.jboss.arquillian.test.api.ArquillianResource;
 import org.jboss.shrinkwrap.api.Archive;
 import org.jboss.shrinkwrap.api.ShrinkWrap;
 import org.jboss.shrinkwrap.api.spec.WebArchive;
+import org.junit.Assert;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import com.github.dockerjava.api.DockerClient;
 import com.github.dockerjava.api.command.CreateContainerResponse;
+import com.github.dockerjava.api.command.DockerCmdExecFactory;
+import com.github.dockerjava.api.model.Event;
 import com.github.dockerjava.api.model.ExposedPort;
 import com.github.dockerjava.api.model.Ports;
 import com.github.dockerjava.core.DockerClientBuilder;
 import com.github.dockerjava.core.DockerClientConfig;
+import com.github.dockerjava.core.command.EventsResultCallback;
 import com.github.dockerjava.jaxrs.DockerCmdExecFactoryImpl;
 
 @RunWith(Arquillian.class)
@@ -34,26 +41,27 @@ public class SimpleEJBTest {
 	@ArquillianResource
 	private Deployer deployer;
 
-	@Inject
+	@EJB
 	private SimpleEJB simpleEJB;
 
 	@Deployment(name = TEST_DEPLOYMENT, managed = false)
 	@TargetsContainer(SERVER)
 	public static Archive<?> deployTestEar() {
 		final WebArchive archive = ShrinkWrap.create(WebArchive.class, SimpleEJBTest.class.getSimpleName() + ".war")
-				.addAsWebInfResource("META-INF/beans.xml").addClass(SimpleEJBTest.class).addClass(SimpleEJB.class);
+				.addClass(SimpleEJB.class).addClass(DockerCmdExecFactory.class);
+		//.addAsWebInfResource("META-INF/beans.xml")
 		return archive;
 	}
 
 	@Test
 	@InSequence(1)
 	@RunAsClient
-	public void startContainer() {
-		final ExposedPort http = ExposedPort.tcp(8581);
-		final ExposedPort mgmt = ExposedPort.tcp(10500);
+	public void startContainer() throws Exception {
+		final ExposedPort http = ExposedPort.tcp(8580);
+		final ExposedPort mgmtHttp = ExposedPort.tcp(10490);
 		final Ports portBindings = new Ports();
-		portBindings.bind(http, Ports.Binding(8581));
-		portBindings.bind(mgmt, Ports.Binding(10500));
+		portBindings.bind(http, Ports.Binding(8580));
+		portBindings.bind(mgmtHttp, Ports.Binding(10490));
 
 		final DockerClientConfig config = DockerClientConfig.createDefaultConfigBuilder()
 				.withUri(URI.create("unix:///var/run/docker.sock").toString()).build();
@@ -70,13 +78,15 @@ public class SimpleEJBTest {
 						"/bin/sh",
 						"-c",
 						"$JBOSS_HOME/bin/standalone.sh -c standalone-full.xml "
-								+ "-b $HOSTNAME -bmanagement $HOSTNAME -Djboss.socket.binding.port-offset=501")
-				.withName("test_wildfly").withExposedPorts(http, mgmt).withPortBindings(portBindings).exec();
+								+ "-b 0.0.0.0 -bmanagement 0.0.0.0 -Djboss.socket.binding.port-offset=500")
+				.withName("test_wildfly").withExposedPorts(http, mgmtHttp).withPortBindings(portBindings).exec();
 		dockerClient.startContainerCmd("test_wildfly").exec();
+		
+		
 
 		// TODO: Implement wait based on port availability or log
 		try {
-			Thread.sleep(15000);
+			Thread.sleep(7000);
 		} catch (InterruptedException e) {
 			e.printStackTrace();
 		}
@@ -86,6 +96,13 @@ public class SimpleEJBTest {
 	@InSequence(2)
 	public void deployPackage() {
 		this.deployer.deploy(TEST_DEPLOYMENT);
+	}
+	
+	@Test
+	@InSequence(3)
+	@OperateOnDeployment(TEST_DEPLOYMENT)
+	public void simpleTest() {
+		Assert.assertEquals("Hello world", simpleEJB.sayHello());
 	}
 
 	// add test cases
