@@ -10,13 +10,9 @@
 		<container qualifier="jboss_1" default="false">
 			<protocol type="Servlet 3.0">
 				<property name="host">localhost</property>
-				<!-- 8581 -->
 				<property name="port">8580</property>
 			</protocol>
 			<configuration>
-			<!-- 
-				<property name="managementPort">9990</property>
-				-->
 				<property name="managementPort">10490</property>
 				<property name="managementAddress">localhost</property>
 				<property name="username">admin</property>

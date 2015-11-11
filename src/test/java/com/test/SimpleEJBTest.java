@@ -1,9 +1,7 @@
 package com.test;
 
-import java.io.IOException;
-import java.net.URI;
+import static com.test.DockerUtil.getDockerClient;
 
-import javax.ejb.EJB;
 import javax.inject.Inject;
 
 import org.jboss.arquillian.container.test.api.Deployer;
@@ -21,16 +19,9 @@ import org.junit.Assert;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
-import com.github.dockerjava.api.DockerClient;
-import com.github.dockerjava.api.command.CreateContainerResponse;
-import com.github.dockerjava.api.command.DockerCmdExecFactory;
-import com.github.dockerjava.api.model.Event;
+import com.github.dockerjava.api.command.InspectContainerResponse;
 import com.github.dockerjava.api.model.ExposedPort;
 import com.github.dockerjava.api.model.Ports;
-import com.github.dockerjava.core.DockerClientBuilder;
-import com.github.dockerjava.core.DockerClientConfig;
-import com.github.dockerjava.core.command.EventsResultCallback;
-import com.github.dockerjava.jaxrs.DockerCmdExecFactoryImpl;
 
 @RunWith(Arquillian.class)
 public class SimpleEJBTest {
@@ -38,18 +29,20 @@ public class SimpleEJBTest {
 	private static final String SERVER = "jboss_1";
 	private static final String TEST_DEPLOYMENT = "DEPLOYMENT";
 
+	private static final String IMAGE_NAME = "test_wildfly";
+	private static final String CONTAINER_NAME = "test_wildfly_container";
+
 	@ArquillianResource
 	private Deployer deployer;
 
-	@EJB
+	@Inject
 	private SimpleEJB simpleEJB;
 
 	@Deployment(name = TEST_DEPLOYMENT, managed = false)
 	@TargetsContainer(SERVER)
 	public static Archive<?> deployTestEar() {
 		final WebArchive archive = ShrinkWrap.create(WebArchive.class, SimpleEJBTest.class.getSimpleName() + ".war")
-				.addClass(SimpleEJB.class).addClass(DockerCmdExecFactory.class);
-		//.addAsWebInfResource("META-INF/beans.xml")
+				.addAsWebInfResource("META-INF/beans.xml").addClass(SimpleEJB.class).addClass(SimpleEJBTest.class);
 		return archive;
 	}
 
@@ -63,30 +56,15 @@ public class SimpleEJBTest {
 		portBindings.bind(http, Ports.Binding(8580));
 		portBindings.bind(mgmtHttp, Ports.Binding(10490));
 
-		final DockerClientConfig config = DockerClientConfig.createDefaultConfigBuilder()
-				.withUri(URI.create("unix:///var/run/docker.sock").toString()).build();
-
-		final DockerCmdExecFactoryImpl dockerCmdExecFactory = new DockerCmdExecFactoryImpl().withReadTimeout(1000)
-				.withConnectTimeout(1000).withMaxTotalConnections(100).withMaxPerRouteConnections(10);
-
-		final DockerClient dockerClient = DockerClientBuilder.getInstance(config)
-				.withDockerCmdExecFactory(dockerCmdExecFactory).build();
-
-		final CreateContainerResponse response = dockerClient
-				.createContainerCmd("test_wildfly")
-				.withCmd(
-						"/bin/sh",
-						"-c",
-						"$JBOSS_HOME/bin/standalone.sh -c standalone-full.xml "
-								+ "-b 0.0.0.0 -bmanagement 0.0.0.0 -Djboss.socket.binding.port-offset=500")
-				.withName("test_wildfly").withExposedPorts(http, mgmtHttp).withPortBindings(portBindings).exec();
-		dockerClient.startContainerCmd("test_wildfly").exec();
-		
-		
+		getDockerClient().createContainerCmd(IMAGE_NAME)
+				.withCmd("/bin/sh", "-c", "$JBOSS_HOME/bin/standalone.sh -c standalone-full.xml "
+						+ "-b $HOSTNAME -bmanagement $HOSTNAME -Djboss.socket.binding.port-offset=500")
+				.withName(CONTAINER_NAME).withExposedPorts(http, mgmtHttp).withPortBindings(portBindings).exec();
+		getDockerClient().startContainerCmd(CONTAINER_NAME).exec();
 
 		// TODO: Implement wait based on port availability or log
 		try {
-			Thread.sleep(7000);
+			Thread.sleep(10000);
 		} catch (InterruptedException e) {
 			e.printStackTrace();
 		}
@@ -94,10 +72,11 @@ public class SimpleEJBTest {
 
 	@Test
 	@InSequence(2)
+	@RunAsClient
 	public void deployPackage() {
-		this.deployer.deploy(TEST_DEPLOYMENT);
+		deployer.deploy(TEST_DEPLOYMENT);
 	}
-	
+
 	@Test
 	@InSequence(3)
 	@OperateOnDeployment(TEST_DEPLOYMENT)
@@ -105,7 +84,23 @@ public class SimpleEJBTest {
 		Assert.assertEquals("Hello world", simpleEJB.sayHello());
 	}
 
-	// add test cases
-	// stop/remove container
+	@Test
+	@InSequence(5)
+	@RunAsClient
+	public void undeploy() {
+		deployer.undeploy(TEST_DEPLOYMENT);
+	}
+
+	@Test
+	@InSequence(5)
+	@RunAsClient
+	public void stopAndRemoveContainer() {
+		getDockerClient().stopContainerCmd(CONTAINER_NAME).exec();
+		final InspectContainerResponse inspectContainerResponse = getDockerClient().inspectContainerCmd(CONTAINER_NAME)
+				.exec();
+		Assert.assertFalse(inspectContainerResponse.getState().isRunning());
+
+		getDockerClient().removeContainerCmd(CONTAINER_NAME).exec();
+	}
 
 }
